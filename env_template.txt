@@ -1,0 +1,25 @@
+# Niya AI Sales Agent - Environment Variables
+# Copy this file to .env and fill in your actual values
+
+# Airtable Configuration
+AIRTABLE_API_KEY=your_airtable_api_key_here
+AIRTABLE_BASE_ID=your_airtable_base_id_here
+
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Calendly Configuration
+CALENDLY_LINK=https://calendly.com/niya/15min
+
+# Gmail Configuration
+# Make sure to place your gmail-service.json file in the project directory
+# The service account should have Gmail API access with send and read permissions
+
+# Optional: Customize follow-up schedule (in days)
+FOLLOW_UP_SCHEDULE=3,7,14
+
+# Optional: Rate limiting (seconds between emails)
+EMAIL_DELAY=2
+
+# Optional: Maximum follow-up attempts
+MAX_FOLLOW_UPS=3 

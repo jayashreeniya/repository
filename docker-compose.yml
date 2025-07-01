@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  niya-sales-agent:
+    build: .
+    container_name: niya-sales-agent
+    environment:
+      - AIRTABLE_API_KEY=${AIRTABLE_API_KEY}
+      - AIRTABLE_BASE_ID=${AIRTABLE_BASE_ID}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CALENDLY_LINK=${CALENDLY_LINK}
+      - FOLLOW_UP_SCHEDULE=${FOLLOW_UP_SCHEDULE:-3,7,14}
+      - EMAIL_DELAY=${EMAIL_DELAY:-2}
+      - MAX_FOLLOW_UPS=${MAX_FOLLOW_UPS:-3}
+    volumes:
+      - ./gmail-service.json:/app/gmail-service.json:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - niya-network
+
+  # Optional: Add a simple web interface for monitoring
+  niya-dashboard:
+    image: nginx:alpine
+    container_name: niya-dashboard
+    ports:
+      - "8080:80"
+    volumes:
+      - ./dashboard:/usr/share/nginx/html
+    depends_on:
+      - niya-sales-agent
+    restart: unless-stopped
+    networks:
+      - niya-network
+
+networks:
+  niya-network:
+    driver: bridge
+
+volumes:
+  logs: 
