@@ -15,8 +15,9 @@ def test_environment():
     load_dotenv()
     
     required_vars = [
-        "AIRTABLE_API_KEY",
-        "AIRTABLE_BASE_ID", 
+        "AIRTABLE_TOKEN",
+        "LEADS_BASE_ID", 
+        "KPIS_BASE_ID",
         "OPENAI_API_KEY"
     ]
     
@@ -41,7 +42,7 @@ def test_dependencies():
         "openai",
         "googleapiclient",
         "google.auth",
-        "airtable",
+        "requests",
         "dotenv"
     ]
     
@@ -62,39 +63,73 @@ def test_dependencies():
         print("✅ All dependencies installed")
         return True
 
-def test_gmail_service():
-    """Test Gmail service account file"""
-    print("\n🔍 Testing Gmail service account...")
+def test_email_configuration():
+    """Test email configuration (Gmail or SMTP)"""
+    print("\n🔍 Testing email configuration...")
     
-    if not os.path.exists("gmail-service.json"):
-        print("❌ gmail-service.json not found")
-        print("   Please download your Gmail service account JSON file")
-        return False
+    email_provider = os.getenv("EMAIL_PROVIDER", "gmail").lower()
+    
+    if email_provider == "gmail":
+        if not os.path.exists("gmail-service.json"):
+            print("❌ gmail-service.json not found")
+            print("   Please download your Gmail service account JSON file")
+            return False
+        else:
+            print("✅ gmail-service.json found")
+            return True
     else:
-        print("✅ gmail-service.json found")
+        # Test SMTP configuration
+        smtp_server = os.getenv("SMTP_SERVER")
+        smtp_username = os.getenv("SMTP_USERNAME")
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        
+        if not all([smtp_server, smtp_username, smtp_password]):
+            print("❌ SMTP configuration incomplete")
+            print("   Please check SMTP_SERVER, SMTP_USERNAME, and SMTP_PASSWORD in .env")
+            return False
+        
+        print(f"✅ SMTP configuration found: {smtp_server}")
         return True
 
 def test_airtable_connection():
-    """Test Airtable connection"""
-    print("\n🔍 Testing Airtable connection...")
+    """Test Airtable connections"""
+    print("\n🔍 Testing Airtable connections...")
     
     try:
-        from airtable import Airtable
+        import requests
         from dotenv import load_dotenv
         
         load_dotenv()
         
-        api_key = os.getenv("AIRTABLE_API_KEY")
-        base_id = os.getenv("AIRTABLE_BASE_ID")
+        token = os.getenv("AIRTABLE_TOKEN")
+        leads_base_id = os.getenv("LEADS_BASE_ID")
+        kpis_base_id = os.getenv("KPIS_BASE_ID")
         
-        if not api_key or not base_id:
+        if not token or not leads_base_id or not kpis_base_id:
             print("❌ Airtable credentials not found in environment")
             return False
         
-        # Try to connect to Airtable
-        at = Airtable(base_id, "Leads", api_key)
-        records = at.get_all(max_records=1)
-        print("✅ Airtable connection successful")
+        # Try to connect to both Airtable bases
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Test Leads base
+        import urllib.parse
+        leads_table_encoded = urllib.parse.quote("Imported table")
+        leads_url = f"https://api.airtable.com/v0/{leads_base_id}/{leads_table_encoded}"
+        leads_response = requests.get(leads_url, headers=headers, params={"maxRecords": 1})
+        leads_response.raise_for_status()
+        print("✅ Leads base connection successful")
+        
+        # Test KPIs base
+        kpis_table_encoded = urllib.parse.quote("Imported table")
+        kpis_url = f"https://api.airtable.com/v0/{kpis_base_id}/{kpis_table_encoded}"
+        kpis_response = requests.get(kpis_url, headers=headers, params={"maxRecords": 1})
+        kpis_response.raise_for_status()
+        print("✅ KPIs base connection successful")
+        
         return True
         
     except Exception as e:
@@ -139,7 +174,7 @@ def main():
     tests = [
         test_environment,
         test_dependencies,
-        test_gmail_service,
+        test_email_configuration,
         test_airtable_connection,
         test_openai_connection
     ]

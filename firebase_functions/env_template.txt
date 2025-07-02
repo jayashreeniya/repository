@@ -1,0 +1,9 @@
+# Firebase Function Environment Variables
+# Copy this file to .env and fill in your actual values
+
+# Airtable Configuration
+AIRTABLE_TOKEN=patR0jIjjm7kQfHt.4156ae0cff4adf236b26e34240c109b122d7b722cecfa08d95cd4c4a300f284a
+LEADS_BASE_ID=appzukRazDqAm3RwI
+
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here 

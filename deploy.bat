@@ -47,18 +47,12 @@ pip install -r requirements.txt
 
 REM Check if .env file exists
 if not exist ".env" (
-    echo ⚠️  .env file not found. Creating from template...
-    if exist "env_template.txt" (
-        copy env_template.txt .env
-        echo ✅ .env file created from template
-        echo ⚠️  Please edit .env file with your actual API keys
-    ) else (
-        echo ❌ env_template.txt not found. Please create .env file manually.
-        pause
-        exit /b 1
-    )
+    echo ❌ .env file not found!
+    echo Please create .env file with your credentials
+    pause
+    exit /b 1
 ) else (
-    echo ✅ .env file found
+    echo ✅ Environment file found
 )
 
 REM Check if Gmail service account file exists
@@ -68,7 +62,7 @@ if not exist "gmail-service.json" (
 )
 
 REM Run setup test
-echo ✅ Running setup tests...
+echo 🧪 Running setup test...
 python test_setup.py
 
 REM Check if Docker is available
@@ -79,6 +73,13 @@ if not errorlevel 1 (
 ) else (
     echo ⚠️  Docker not found. You can install Docker for containerized deployment.
 )
+
+echo.
+echo 🤖 Starting Niya Sales Agent...
+echo Press Ctrl+C to stop the agent
+echo.
+
+python niya_agent.py
 
 echo.
 echo 🎉 Deployment completed!

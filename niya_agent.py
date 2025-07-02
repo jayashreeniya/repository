@@ -1,8 +1,10 @@
 import os, time, base64
 import re
+import requests
+import urllib.parse
+import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-from airtable import Airtable
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from openai import OpenAI
@@ -11,19 +13,71 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-TABLE = "Leads"
+AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
+LEADS_BASE_ID = os.getenv("LEADS_BASE_ID", "appzukRazDqAm3RwI")
+KPIS_BASE_ID = os.getenv("KPIS_BASE_ID", "app5MfJmA49we1vjM")
+LEADS_TABLE = "Imported table"
+KPIS_TABLE = "Imported table"
 CALENDLY_LINK = os.getenv("CALENDLY_LINK", "https://calendly.com/niya/15min")
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "gmail").lower()
+SMTP_SERVER = os.getenv("SMTP_SERVER")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # Initialize services
-GMAIL_SERVICE_ACC = service_account.Credentials.from_service_account_file(
-    "gmail-service.json",
-    scopes=["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"]
-)
-GMAIL = build("gmail", "v1", credentials=GMAIL_SERVICE_ACC)
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-at = Airtable(BASE_ID, TABLE, AIRTABLE_API_KEY)
+
+# Initialize Airtable with Personal Access Token
+
+class AirtableAPI:
+    def __init__(self, base_id: str, table_name: str, token: str):
+        self.base_id = base_id
+        self.table_name = table_name
+        self.token = token
+        # URL encode the table name to handle spaces
+        import urllib.parse
+        encoded_table_name = urllib.parse.quote(table_name)
+        self.base_url = f"https://api.airtable.com/v0/{base_id}/{encoded_table_name}"
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+    
+    def get_all(self, formula: str = None) -> List[Dict]:
+        """Get all records from Airtable"""
+        params = {}
+        if formula:
+            params["filterByFormula"] = formula
+        
+        response = requests.get(self.base_url, headers=self.headers, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        return data.get("records", [])
+    
+    def update(self, record_id: str, fields: Dict) -> Dict:
+        """Update a record in Airtable"""
+        url = f"{self.base_url}/{record_id}"
+        payload = {"fields": fields}
+        
+        response = requests.patch(url, headers=self.headers, json=payload)
+        response.raise_for_status()
+        
+        return response.json()
+    
+    def create(self, fields: Dict) -> Dict:
+        """Create a new record in Airtable"""
+        payload = {"fields": fields}
+        
+        response = requests.post(self.base_url, headers=self.headers, json=payload)
+        response.raise_for_status()
+        
+        return response.json()
+
+# Initialize Airtable connections
+leads_at = AirtableAPI(LEADS_BASE_ID, LEADS_TABLE, AIRTABLE_TOKEN)
+kpis_at = AirtableAPI(KPIS_BASE_ID, KPIS_TABLE, AIRTABLE_TOKEN)
 
 class NiyaSalesAgent:
     def __init__(self):
@@ -38,15 +92,15 @@ class NiyaSalesAgent:
     def fetch_leads(self, status_filter: str = "new") -> List[Dict]:
         """Fetch leads based on status filter"""
         if status_filter == "new":
-            formula = "AND({Email Sent?}=FALSE, {Email}!='')"
+            formula = "AND({Email Sent?}='FALSE', {Email}!='')"
         elif status_filter == "follow_up":
-            formula = "AND({Email Sent?}=TRUE, {Last Email Sent}!='', {Reply Status}='')"
+            formula = "AND({Email Sent?}='TRUE', {Last Email Sent}!='', {Reply Type}='')"
         elif status_filter == "positive":
-            formula = "{Reply Status}='Positive'"
+            formula = "{Reply Type}='Interested'"
         else:
             formula = ""
         
-        return at.get_all(formula=formula) if formula else at.get_all()
+        return leads_at.get_all(formula=formula) if formula else leads_at.get_all()
     
     def generate_cold_email(self, fields: Dict) -> str:
         """Generate personalized cold email using GPT-4"""
@@ -107,19 +161,21 @@ class NiyaSalesAgent:
         """Classify email reply using GPT-4"""
         prompt = f"""
         Analyze this email reply and classify it into one of these categories:
-        - Positive: Interested, wants to learn more, asks questions, books meeting
-        - Negative: Not interested, objections, declines
-        - Neutral: Acknowledges receipt, asks for more info, needs time
-        - Meeting Booked: Confirms meeting or calendar booking
+        - Interested: Wants to learn more, asks questions, shows genuine interest
+        - Later: Not ready now but might be interested later, asks to follow up
+        - Not Now: Not interested, objections, declines
+        - Wrong Person: Not the right contact, should be someone else
+        - Meeting Booked: Confirms meeting or calendar booking via Calendly
         
         Reply: {reply_text}
         
         Return JSON format:
         {{
-            "category": "Positive/Negative/Neutral/Meeting Booked",
+            "category": "Interested/Later/Not Now/Wrong Person/Meeting Booked",
             "confidence": 0.95,
             "key_points": ["point1", "point2"],
-            "next_action": "suggested next step"
+            "next_action": "suggested next step",
+            "calendly_clicked": true/false
         }}
         """
         
@@ -142,15 +198,40 @@ class NiyaSalesAgent:
             }
     
     def send_email(self, to: str, subject: str, body: str) -> bool:
-        """Send email via Gmail API"""
-        try:
-            msg = f"To: {to}\r\nSubject: {subject}\r\n\r\n{body}"
-            raw = base64.urlsafe_b64encode(msg.encode()).decode()
-            GMAIL.users().messages().send(userId="me", body={"raw": raw}).execute()
-            return True
-        except Exception as e:
-            print(f"Error sending email to {to}: {e}")
-            return False
+        """Send email via Gmail API or SMTP (Zoho)"""
+        if EMAIL_PROVIDER == "gmail":
+            try:
+                msg = f"To: {to}\r\nSubject: {subject}\r\n\r\n{body}"
+                import base64
+                from email.mime.text import MIMEText
+                message = MIMEText(body)
+                message["to"] = to
+                message["subject"] = subject
+                raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+                message_body = {"raw": raw}
+                GMAIL.users().messages().send(userId="me", body=message_body).execute()
+                return True
+            except Exception as e:
+                print(f"❌ Gmail send failed: {e}")
+                return False
+        else:
+            # SMTP (Zoho or other)
+            try:
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+                msg = MIMEMultipart()
+                msg["From"] = SMTP_USERNAME
+                msg["To"] = to
+                msg["Subject"] = subject
+                msg.attach(MIMEText(body, "plain"))
+                with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                    server.sendmail(SMTP_USERNAME, to, msg.as_string())
+                return True
+            except Exception as e:
+                print(f"❌ SMTP send failed: {e}")
+                return False
     
     def check_calendly_clicks(self, email: str) -> bool:
         """Check if Calendly link was clicked (simplified version)"""
@@ -161,9 +242,44 @@ class NiyaSalesAgent:
     def update_lead_status(self, record_id: str, updates: Dict):
         """Update lead status in Airtable"""
         try:
-            at.update(record_id, updates)
+            leads_at.update(record_id, updates)
         except Exception as e:
             print(f"Error updating record {record_id}: {e}")
+    
+    def log_kpis(self, kpis: Dict):
+        """Log KPIs to the KPIs base"""
+        try:
+            week_start = datetime.now().date() - timedelta(days=datetime.now().weekday())
+            kpi_record = {
+                "Week Start": week_start.isoformat(),
+                "Total Leads": kpis["total_leads"],
+                "Emails Sent": kpis["emails_sent"],
+                "Interested Replies": kpis["reply_breakdown"]["interested"],
+                "Later Replies": kpis["reply_breakdown"]["later"],
+                "Not Now Replies": kpis["reply_breakdown"]["not_now"],
+                "Wrong Person Replies": kpis["reply_breakdown"]["wrong_person"],
+                "Meetings Booked": kpis["reply_breakdown"]["meeting_booked"],
+                "Calendly Clicks": kpis["calendly_metrics"]["clicks"],
+                "Demos Booked": kpis["calendly_metrics"]["demos_booked"],
+                "Reply Rate": round(kpis["overall_rates"]["reply_rate"], 2),
+                "Meeting Rate": round(kpis["overall_rates"]["meeting_rate"], 2),
+                "Demo Rate": round(kpis["overall_rates"]["demo_rate"], 2),
+                "Total Follow-up Attempts": kpis["follow_up_metrics"]["total_attempts"]
+            }
+            
+            # Check if week already exists
+            existing_records = kpis_at.get_all(f"{{Week Start}}='{week_start.isoformat()}'")
+            if existing_records:
+                # Update existing record
+                kpis_at.update(existing_records[0]["id"], kpi_record)
+                print(f"📊 Updated KPIs for week starting {week_start.isoformat()}")
+            else:
+                # Create new record
+                kpis_at.create(kpi_record)
+                print(f"📊 Logged KPIs for week starting {week_start.isoformat()}")
+                
+        except Exception as e:
+            print(f"Error logging KPIs: {e}")
     
     def process_new_leads(self):
         """Process new leads that haven't been emailed yet"""
@@ -229,21 +345,50 @@ class NiyaSalesAgent:
                     time.sleep(2)
     
     def calculate_kpis(self) -> Dict:
-        """Calculate and return KPIs"""
+        """Calculate and return comprehensive KPIs"""
         all_leads = self.fetch_leads()
         
         total_leads = len(all_leads)
         emails_sent = sum(1 for lead in all_leads if lead['fields'].get('Email Sent?', False))
-        positive_replies = sum(1 for lead in all_leads if lead['fields'].get('Reply Status') == 'Positive')
-        meetings_booked = sum(1 for lead in all_leads if lead['fields'].get('Reply Status') == 'Meeting Booked')
+        
+        # Reply classification counts
+        interested_count = sum(1 for lead in all_leads if lead['fields'].get('Reply Status') == 'Interested')
+        later_count = sum(1 for lead in all_leads if lead['fields'].get('Reply Status') == 'Later')
+        not_now_count = sum(1 for lead in all_leads if lead['fields'].get('Reply Status') == 'Not Now')
+        wrong_person_count = sum(1 for lead in all_leads if lead['fields'].get('Reply Status') == 'Wrong Person')
+        meeting_booked_count = sum(1 for lead in all_leads if lead['fields'].get('Reply Status') == 'Meeting Booked')
+        
+        # Calendly tracking
+        calendly_clicks = sum(1 for lead in all_leads if lead['fields'].get('Calendly Clicked', False))
+        demos_booked = sum(1 for lead in all_leads if lead['fields'].get('Demo Booked?', False))
+        
+        # Follow-up metrics
+        follow_up_attempts = sum(lead['fields'].get('Follow-up Attempts', 0) for lead in all_leads)
         
         return {
             "total_leads": total_leads,
             "emails_sent": emails_sent,
-            "positive_replies": positive_replies,
-            "meetings_booked": meetings_booked,
-            "reply_rate": (positive_replies / emails_sent * 100) if emails_sent > 0 else 0,
-            "meeting_rate": (meetings_booked / emails_sent * 100) if emails_sent > 0 else 0
+            "reply_breakdown": {
+                "interested": interested_count,
+                "later": later_count,
+                "not_now": not_now_count,
+                "wrong_person": wrong_person_count,
+                "meeting_booked": meeting_booked_count
+            },
+            "calendly_metrics": {
+                "clicks": calendly_clicks,
+                "demos_booked": demos_booked,
+                "conversion_rate": (demos_booked / calendly_clicks * 100) if calendly_clicks > 0 else 0
+            },
+            "follow_up_metrics": {
+                "total_attempts": follow_up_attempts,
+                "avg_attempts_per_lead": follow_up_attempts / emails_sent if emails_sent > 0 else 0
+            },
+            "overall_rates": {
+                "reply_rate": ((interested_count + later_count + meeting_booked_count) / emails_sent * 100) if emails_sent > 0 else 0,
+                "meeting_rate": (meeting_booked_count / emails_sent * 100) if emails_sent > 0 else 0,
+                "demo_rate": (demos_booked / emails_sent * 100) if emails_sent > 0 else 0
+            }
         }
     
     def run(self):
@@ -259,13 +404,33 @@ class NiyaSalesAgent:
             
             # Calculate and display KPIs
             kpis = self.calculate_kpis()
-            print("\n📊 Current KPIs:")
+            print("\n📊 Niya Sales Agent KPI Dashboard")
+            print("=" * 50)
+            print(f"📈 Overall Metrics:")
             print(f"   Total Leads: {kpis['total_leads']}")
             print(f"   Emails Sent: {kpis['emails_sent']}")
-            print(f"   Positive Replies: {kpis['positive_replies']}")
-            print(f"   Meetings Booked: {kpis['meetings_booked']}")
-            print(f"   Reply Rate: {kpis['reply_rate']:.1f}%")
-            print(f"   Meeting Rate: {kpis['meeting_rate']:.1f}%")
+            print(f"   Reply Rate: {kpis['overall_rates']['reply_rate']:.1f}%")
+            print(f"   Meeting Rate: {kpis['overall_rates']['meeting_rate']:.1f}%")
+            print(f"   Demo Rate: {kpis['overall_rates']['demo_rate']:.1f}%")
+            
+            print(f"\n📧 Reply Breakdown:")
+            print(f"   Interested: {kpis['reply_breakdown']['interested']}")
+            print(f"   Later: {kpis['reply_breakdown']['later']}")
+            print(f"   Not Now: {kpis['reply_breakdown']['not_now']}")
+            print(f"   Wrong Person: {kpis['reply_breakdown']['wrong_person']}")
+            print(f"   Meeting Booked: {kpis['reply_breakdown']['meeting_booked']}")
+            
+            print(f"\n📅 Calendly Metrics:")
+            print(f"   Clicks: {kpis['calendly_metrics']['clicks']}")
+            print(f"   Demos Booked: {kpis['calendly_metrics']['demos_booked']}")
+            print(f"   Conversion Rate: {kpis['calendly_metrics']['conversion_rate']:.1f}%")
+            
+            print(f"\n🔄 Follow-up Metrics:")
+            print(f"   Total Attempts: {kpis['follow_up_metrics']['total_attempts']}")
+            print(f"   Avg Attempts/Lead: {kpis['follow_up_metrics']['avg_attempts_per_lead']:.1f}")
+            
+            # Log KPIs to the KPIs base
+            self.log_kpis(kpis)
             
         except Exception as e:
             print(f"❌ Error in main execution: {e}")

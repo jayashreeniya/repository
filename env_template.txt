@@ -2,8 +2,9 @@
 # Copy this file to .env and fill in your actual values
 
 # Airtable Configuration
-AIRTABLE_API_KEY=your_airtable_api_key_here
-AIRTABLE_BASE_ID=your_airtable_base_id_here
+AIRTABLE_TOKEN=your_airtable_personal_access_token_here
+LEADS_BASE_ID=appzukRazDqAm3RwI
+KPIS_BASE_ID=app5MfJmA49we1vjM
 
 # OpenAI Configuration
 OPENAI_API_KEY=your_openai_api_key_here
@@ -22,4 +23,7 @@ FOLLOW_UP_SCHEDULE=3,7,14
 EMAIL_DELAY=2
 
 # Optional: Maximum follow-up attempts
-MAX_FOLLOW_UPS=3 
+MAX_FOLLOW_UPS=3
+
+# Firebase Function Configuration (after deployment)
+FIREBASE_FUNCTION_URL=https://us-central1-YOUR_PROJECT.cloudfunctions.net/firebase_function 
